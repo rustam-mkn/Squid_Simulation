@@ -6,128 +6,112 @@ public class SquidBrain : MonoBehaviour
 {
     private Genome genome;
     private NeuralNetwork nn;
+    private Transform agentTransform;
 
-    // Структура для типизированного вывода НС
+    // Структура выходов НС БЕЗ хватательных щупалец
     public struct BrainOutput
     {
-        // Движение
-        public float moveForward;    // -1 (назад) to 1 (вперед)
-        public float turn;           // -1 (влево) to 1 (вправо)
-        // public float moveIntensity;  // 0 to 1 (если нужно отдельное управление силой)
-
-        // Хватательные щупальца (0 - левое, 1 - правое)
-        public Vector2 graspTentacleTargetDir0; // Нормализованное направление от кальмара
-        public float graspTentacleExtend0;      // 0 (втянуто) to 1 (макс вытянуто)
-        public bool graspTentacleTryGrasp0;
-        public bool graspTentacleTryAttack0; // TODO: Для атаки
-
-        public Vector2 graspTentacleTargetDir1;
-        public float graspTentacleExtend1;
-        public bool graspTentacleTryGrasp1;
-        public bool graspTentacleTryAttack1; // TODO: Для атаки
-        
+        public float moveForward;
+        public float turn;
         public bool shouldEat;
         public bool shouldReproduce;
+        // Выходы для хватательных щупалец УДАЛЕНЫ
     }
 
     public void Initialize(Genome agentGenome)
     {
         if (agentGenome == null) {
-            Debug.LogError("SquidBrain initialized with null genome!");
-            enabled = false; return;
+            Debug.LogError($"SquidBrain on {gameObject.name} initialized with null genome! Disabling.");
+            enabled = false;
+            return;
         }
         this.genome = agentGenome;
-        this.nn = new NeuralNetwork(genome); // Передаем весь геном, НС сама возьмет нужные параметры
+        this.nn = new NeuralNetwork(genome); // NeuralNetwork конструктор должен быть готов к genome.outputNodes
+        this.agentTransform = transform;
     }
 
     public BrainOutput ProcessInputs(List<float> inputs)
     {
-        if (nn == null)
-        {
-            Debug.LogError("Neural Network in SquidBrain is not initialized!");
+        if (nn == null || !nn.IsInitializedProperly()) { // Добавил проверку IsInitializedProperly
+            // Debug.LogError($"SquidBrain on {agentTransform.name}: Neural Network not properly initialized or null.");
             return new BrainOutput();
         }
-        if (inputs == null) {
-            Debug.LogError("SquidBrain received null inputs!");
+        if (inputs == null || inputs.Count != genome.inputNodes) {
+            // Debug.LogError($"SquidBrain on {agentTransform.name}: Inputs null or count mismatch. Expected {genome.inputNodes}, Got {inputs?.Count}.");
             return new BrainOutput();
         }
-
 
         float[] nnOutputsArray = nn.FeedForward(inputs.ToArray());
         BrainOutput output = new BrainOutput();
-
-        // Распределение выходов НС по полям BrainOutput
-        // Это должно строго соответствовать genome.outputNodes и их назначению
         int outIdx = 0;
+
+        // --- Используем выходы НС для ВСЕХ действий ---
         // Движение (2 нейрона)
-        if (nnOutputsArray.Length > outIdx) output.moveForward = nnOutputsArray[outIdx++];
-        if (nnOutputsArray.Length > outIdx) output.turn = nnOutputsArray[outIdx++];
-        // output.moveIntensity = Mathf.Clamp01((output.moveForward + 1f)/2f); // Пример: интенсивность от движения вперед
+        if (nnOutputsArray.Length > outIdx) output.moveForward = nnOutputsArray[outIdx++]; else output.moveForward = 0;
+        if (nnOutputsArray.Length > outIdx) output.turn = nnOutputsArray[outIdx++]; else output.turn = 0;
 
-        // Щупальце 0 (3 или 4 нейрона)
-        if (nnOutputsArray.Length > outIdx + 2) { // dirX, dirY, extend
-            output.graspTentacleTargetDir0 = new Vector2(nnOutputsArray[outIdx++], nnOutputsArray[outIdx++]).normalized;
-            output.graspTentacleExtend0 = Mathf.Clamp01((nnOutputsArray[outIdx++] + 1f) / 2f); // Tanh -1..1 -> 0..1
-        }
-        if (nnOutputsArray.Length > outIdx) output.graspTentacleTryGrasp0 = nnOutputsArray[outIdx++] > 0.0f; // Порог для Tanh
-        // if (nnOutputsArray.Length > outIdx) output.graspTentacleTryAttack0 = nnOutputsArray[outIdx++] > 0.5f;
+        // Выходы для хватательных щупалец УДАЛЕНЫ из этой секции
 
+        // Другие действия (теперь идут сразу после движения)
+        if (nnOutputsArray.Length > outIdx) output.shouldEat = nnOutputsArray[outIdx++] > 0.5f; else output.shouldEat = false;
+        if (nnOutputsArray.Length > outIdx) output.shouldReproduce = nnOutputsArray[outIdx++] > 0.7f; else output.shouldReproduce = false;
 
-        // Щупальце 1 (3 или 4 нейрона)
-         if (nnOutputsArray.Length > outIdx + 2) {
-            output.graspTentacleTargetDir1 = new Vector2(nnOutputsArray[outIdx++], nnOutputsArray[outIdx++]).normalized;
-            output.graspTentacleExtend1 = Mathf.Clamp01((nnOutputsArray[outIdx++] + 1f) / 2f);
-        }
-        if (nnOutputsArray.Length > outIdx) output.graspTentacleTryGrasp1 = nnOutputsArray[outIdx++] > 0.0f;
-        // if (nnOutputsArray.Length > outIdx) output.graspTentacleTryAttack1 = nnOutputsArray[outIdx++] > 0.5f;
-
-        // Другие действия
-        if (nnOutputsArray.Length > outIdx) output.shouldEat = nnOutputsArray[outIdx++] > 0.5f;
-        if (nnOutputsArray.Length > outIdx) output.shouldReproduce = nnOutputsArray[outIdx++] > 0.7f; // Более высокий порог для размножения
+        // Отладка выходов НС
+        // if (Time.frameCount % 120 == 0 && agentTransform != null && agentTransform.name.EndsWith("0")) {
+        //    Debug.Log($"{agentTransform.name} BrainOut: Fwd:{output.moveForward:F2} Turn:{output.turn:F2} Eat:{output.shouldEat} Repr:{output.shouldReproduce}");
+        // }
 
         return output;
     }
 }
 
-// NeuralNetwork класс (оставляем здесь для простоты, можно вынести)
+// Класс NeuralNetwork (убедитесь, что он у вас есть и корректен)
 public class NeuralNetwork
 {
     private List<float> weights;
     private int numInputs, numHidden, numOutputs;
+    private bool nnInitializedCorrectly = false;
 
-    public NeuralNetwork(Genome genome) // Принимает весь геном
+    public bool IsInitializedProperly() => nnInitializedCorrectly;
+
+    public NeuralNetwork(Genome genome)
     {
         if (genome == null) {
-             Debug.LogError("NeuralNetwork created with null Genome!");
+             Debug.LogError("NeuralNetwork constructor received a null Genome!");
              return;
         }
+        // Проверка на валидность размеров НС из генома
+        if (genome.inputNodes <=0 || genome.hiddenNodes <=0 || genome.outputNodes <=0) {
+            Debug.LogError($"NeuralNetwork constructor: Invalid NN dimensions in Genome for agent. I:{genome.inputNodes} H:{genome.hiddenNodes} O:{genome.outputNodes}");
+            return;
+        }
+
         numInputs = genome.inputNodes;
         numHidden = genome.hiddenNodes;
-        numOutputs = genome.outputNodes;
+        numOutputs = genome.outputNodes; // Это значение теперь должно быть меньше (например, 4)
         
-        // Проверка и инициализация весов
         int expectedWeights = (numInputs * numHidden) + numHidden + (numHidden * numOutputs) + numOutputs;
         if (genome.nnWeights == null || genome.nnWeights.Count != expectedWeights)
         {
-            Debug.LogWarning($"NN Weight mismatch or null: Expected {expectedWeights}, Got {(genome.nnWeights == null ? "null" : genome.nnWeights.Count.ToString())}. Reinitializing weights for this NN instance.");
+            Debug.LogWarning($"NeuralNetwork: NN Weights in Genome are null or count mismatch. Expected {expectedWeights}, Got {(genome.nnWeights == null ? "null" : genome.nnWeights.Count.ToString())}. Initializing new random weights for this NN instance. The Genome itself is NOT modified here.");
             weights = new List<float>();
             for(int i=0; i<expectedWeights; ++i) weights.Add(Random.Range(-1f, 1f));
-            // Важно: это не меняет геном, только локальные веса этой НС. Геном должен быть корректен.
-            // Если геном изначально неверен, он будет таким для всех НС, использующих его.
         } else {
              weights = new List<float>(genome.nnWeights); // Копируем веса из генома
         }
+        nnInitializedCorrectly = true;
     }
 
     public float[] FeedForward(float[] inputs)
     {
-        if (weights == null || weights.Count == 0) {
-            Debug.LogError("NN FeedForward called with uninitialized weights!");
-            return new float[numOutputs];
+        if (!nnInitializedCorrectly) {
+            Debug.LogError("NN FeedForward called on an incorrectly initialized NeuralNetwork instance.");
+            return new float[numOutputs > 0 ? numOutputs : 1];
         }
+
         if (inputs.Length != numInputs)
         {
-            Debug.LogError($"NN input size mismatch! Expected {numInputs}, Got {inputs.Length}");
+            Debug.LogError($"NN input size mismatch! Expected {numInputs}, Got {inputs.Length}. Cannot proceed.");
             return new float[numOutputs];
         }
 
@@ -141,11 +125,11 @@ public class NeuralNetwork
             float sum = 0;
             for (int j = 0; j < numInputs; j++)
             {
-                if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (input to hidden)"); return finalOutputs; }
+                if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (input to hidden layer weights)."); return finalOutputs; }
                 sum += inputs[j] * weights[weightIndex++];
             }
-            if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (hidden bias)"); return finalOutputs; }
-            sum += weights[weightIndex++]; // Смещение (bias)
+            if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (hidden layer bias)."); return finalOutputs; }
+            sum += weights[weightIndex++];
             hiddenOutputs[i] = Tanh(sum);
         }
 
@@ -155,11 +139,11 @@ public class NeuralNetwork
             float sum = 0;
             for (int j = 0; j < numHidden; j++)
             {
-                if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (hidden to output)"); return finalOutputs; }
+                if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (hidden to output layer weights)."); return finalOutputs; }
                 sum += hiddenOutputs[j] * weights[weightIndex++];
             }
-            if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (output bias)"); return finalOutputs; }
-            sum += weights[weightIndex++]; // Смещение (bias)
+            if (weightIndex >= weights.Count) { Debug.LogError("NN weight index out of bounds (output layer bias)."); return finalOutputs; }
+            sum += weights[weightIndex++];
             finalOutputs[i] = Tanh(sum);
         }
         return finalOutputs;

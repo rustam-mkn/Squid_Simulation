@@ -7,62 +7,50 @@ public class SquidMovement : MonoBehaviour
     private Genome genome;
 
     [Header("Movement Parameters (Base Values)")]
-    public float baseForwardForce = 10f; // Сила для движения вперед/назад
-    public float turnTorque = 5f;      // Крутящий момент для поворота
-    public float maxSpeedBase = 3f;    // Базовая максимальная скорость
+    public float baseForwardForce = 12f; // Немного увеличил
+    public float baseTurnTorque = 7f;  // Немного увеличил
+    public float maxSpeedBase = 3.5f;
 
-    // Динамические параметры, зависящие от генома
     private float currentMoveForce;
     private float currentTurnTorque;
     private float currentMaxSpeed;
     
-    // public Transform siphonTransform; // Для визуализации сифона, если будет
-
     public void Initialize(Genome agentGenome, Rigidbody2D rigidBody)
     {
         this.genome = agentGenome;
         this.rb = rigidBody;
 
         if (genome == null || rb == null) {
-            Debug.LogError("SquidMovement initialized with null genome or Rigidbody2D!");
             enabled = false; return;
         }
 
-        // Настройка сил/моментов на основе генома
-        // Размер мантии может влиять на силу и макс. скорость
-        float sizeFactor = Mathf.Clamp(genome.mantleLength, 0.5f, 2.0f); // Ограничиваем влияние размера
-        currentMoveForce = baseForwardForce * sizeFactor;
-        currentTurnTorque = turnTorque / Mathf.Sqrt(sizeFactor); // Большие медленнее поворачивают
-        currentMaxSpeed = maxSpeedBase * Mathf.Sqrt(sizeFactor); // Большие могут быть чуть быстрее
+        float sizeFactor = Mathf.Clamp(genome.mantleLength, 0.5f, 1.8f);
+        currentMoveForce = baseForwardForce * sizeFactor * genome.baseMoveForceFactor; // Используем ген
+        currentTurnTorque = baseTurnTorque * genome.baseTurnTorqueFactor / Mathf.Sqrt(sizeFactor); // Используем ген
+        currentMaxSpeed = maxSpeedBase * Mathf.Sqrt(sizeFactor);
         
-        rb.linearDamping = 1f; // Линейное сопротивление для более плавного замедления
-        rb.angularDamping = 2f; // Угловое сопротивление
+        rb.linearDamping = 1.2f;
+        rb.angularDamping = 2.5f; // Чуть больше угловое сопротивление для стабильности
     }
 
     public void ExecuteMovement(SquidBrain.BrainOutput brainOutput)
     {
         if (!enabled || rb == null) return;
 
-        // Движение вперед/назад
-        // brainOutput.moveForward: -1 (назад) to 1 (вперед)
-        Vector2 forceDirection = transform.up; // "Вперед" для кальмара - это transform.up
-        rb.AddForce(forceDirection * brainOutput.moveForward * currentMoveForce * Time.fixedDeltaTime, ForceMode2D.Force); // ForceMode2D.Force для постоянного ускорения
+        Vector2 forceDirection = transform.up;
+        // Умножаем на Time.fixedDeltaTime, так как AddForce с ForceMode2D.Force уже учитывает время,
+        // но для более предсказуемого поведения при разном Fixed Timestep лучше явно умножать.
+        // Однако, стандартно для ForceMode2D.Force НЕ нужно умножать на deltaTime.
+        // Оставим без deltaTime для ForceMode2D.Force, но убедимся, что силы не слишком большие.
+        rb.AddForce(forceDirection * brainOutput.moveForward * currentMoveForce * 0.1f); // Уменьшил множитель силы, т.к. baseForwardForce увеличен
 
         // Поворот
-        // brainOutput.turn: -1 (влево) to 1 (вправо)
-        rb.AddTorque(-brainOutput.turn * currentTurnTorque * Time.fixedDeltaTime, ForceMode2D.Force); // Знак минус, т.к. AddTorque вращает по Z против часовой
+        // Debug.Log($"Agent: {gameObject.name}, Turn Input: {brainOutput.turn:F3}, Torque Applied: {-brainOutput.turn * currentTurnTorque * 0.1f :F3}");
+        rb.AddTorque(-brainOutput.turn * currentTurnTorque * 0.1f); // Уменьшил множитель силы
 
-        // Ограничение максимальной скорости
         if (rb.linearVelocity.magnitude > currentMaxSpeed)
         {
             rb.linearVelocity = rb.linearVelocity.normalized * currentMaxSpeed;
         }
-        
-        // TODO: Анимация сифона, если он есть и управляется отдельно
-        // if (siphonTransform != null) {
-        //    // Поворот сифона может быть основан на brainOutput.turn или отдельном выходе НС
-        //    float siphonAngle = -brainOutput.turn * 45f; // Пример: сифон поворачивается до 45 градусов
-        //    siphonTransform.localRotation = Quaternion.Euler(0, 0, siphonAngle);
-        // }
     }
 }

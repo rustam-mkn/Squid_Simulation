@@ -3,97 +3,61 @@ using UnityEngine;
 
 public class InputManager : MonoBehaviour
 {
-    private SimulationManager simManager;
+    // SimulationManager больше не нужен здесь напрямую для управления симуляцией
     private Camera mainCamera;
-    private UIManager uiManager; // Для взаимодействия с UI при кликах
-
-    [Header("Camera Controls")]
-    public float panSpeed = 20f;
-    public float scrollSpeed = 20f;
-    public float minZoomOrthographic = 2f;
-    public float maxZoomOrthographic = 50f;
+    private UIManager uiManager;
+    private CameraController cameraController; // Для управления слежением
 
     [Header("Divine Tools (Example)")]
-    public GameObject plantFoodPrefabToSpawn; // Назначить в инспекторе
-    public bool divineToolsEnabled = false; // Включать/выключать через UI
+    public GameObject plantFoodPrefabToSpawn;
+    public bool divineToolsEnabled = false;
 
     void Start()
     {
-        simManager = FindFirstObjectByType<SimulationManager>();
         uiManager = FindFirstObjectByType<UIManager>();
+        cameraController = FindFirstObjectByType<CameraController>();
         mainCamera = Camera.main;
 
         if (mainCamera == null) {
             Debug.LogError("Main Camera not found by InputManager!");
             enabled = false;
         }
+        if (cameraController == null) {
+            Debug.LogWarning("CameraController not found by InputManager. Follow agent feature might not work.");
+        }
     }
 
     void Update()
     {
-        HandleCameraControls();
-        // HandleSimulationControls(); // Перенесено в UIManager для кнопок
+        // cameraController будет сам обрабатывать свое движение и зум.
+        // Этот скрипт теперь отвечает за клики по миру (выбор агента, божественные инструменты).
         HandleAgentSelectionAndDivineTools();
     }
 
-    void HandleCameraControls()
-    {
-        if (mainCamera == null) return;
-
-        // Проверяем, не находится ли курсор над UI элементом, чтобы не двигать камеру при кликах по UI
-        if (UnityEngine.EventSystems.EventSystem.current != null &&
-            UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
-        {
-            return;
-        }
-
-        float horizontal = 0f;
-        float vertical = 0f;
-
-        // Используем стандартные оси, если они настроены, или прямые клавиши
-        if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) vertical = 1f;
-        if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) vertical = -1f;
-        if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow)) horizontal = -1f;
-        if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow)) horizontal = 1f;
-
-
-        if (Mathf.Abs(horizontal) > 0.01f || Mathf.Abs(vertical) > 0.01f)
-        {
-            // Используем Time.unscaledDeltaTime, чтобы камера двигалась даже на паузе
-            Vector3 move = new Vector3(horizontal, vertical, 0) * panSpeed * Time.unscaledDeltaTime;
-            mainCamera.transform.Translate(move, Space.World);
-        }
-        
-        float scroll = Input.GetAxis("Mouse ScrollWheel");
-        if (mainCamera.orthographic && Mathf.Abs(scroll) > 0.01f)
-        {
-            mainCamera.orthographicSize -= scroll * scrollSpeed * Time.unscaledDeltaTime * 10f;
-            mainCamera.orthographicSize = Mathf.Clamp(mainCamera.orthographicSize, minZoomOrthographic, maxZoomOrthographic);
-        }
-    }
 
     void HandleAgentSelectionAndDivineTools()
     {
         if (mainCamera == null) return;
 
-        // Не обрабатывать клики мыши, если курсор над UI
         if (UnityEngine.EventSystems.EventSystem.current != null &&
             UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
         {
             return;
         }
 
-        if (Input.GetMouseButtonDown(0)) // Левая кнопка - выбор агента
+        if (Input.GetMouseButtonDown(0))
         {
             Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
             RaycastHit2D hit = Physics2D.GetRayIntersection(ray, Mathf.Infinity);
 
             if (hit.collider != null)
             {
-                SquidAgent agent = hit.collider.GetComponentInParent<SquidAgent>(); // GetComponentInParent на случай, если кликнули по щупальцу
+                SquidAgent agent = hit.collider.GetComponentInParent<SquidAgent>();
                 if (agent != null && uiManager != null)
                 {
                     uiManager.SelectAgentForInspector(agent);
+                } else if (agent == null && uiManager != null) { // Кликнули не по агенту
+                     uiManager.DeselectAgentForInspector();
                 }
             } else {
                  if (uiManager != null) uiManager.DeselectAgentForInspector();
@@ -101,13 +65,16 @@ public class InputManager : MonoBehaviour
         }
 
         if (divineToolsEnabled && plantFoodPrefabToSpawn != null) {
-            if (Input.GetMouseButtonDown(1)) // Правая кнопка - спавн еды (пример)
+            if (Input.GetMouseButton(1)) // Правая кнопка мыши (удерживание для спавна)
             {
-                Vector3 mouseWorldPos = mainCamera.ScreenToWorldPoint(Input.mousePosition);
-                mouseWorldPos.z = 0;
-                Instantiate(plantFoodPrefabToSpawn, mouseWorldPos, Quaternion.identity);
-                if(FindFirstObjectByType<EventLogPanel>() != null)
-                    FindFirstObjectByType<EventLogPanel>().AddLogMessage("Divine intervention: Plant food spawned.");
+                // Спавнить с некоторой задержкой, чтобы не создавать слишком много
+                // Для простоты пока оставим по клику, но лучше сделать rate limit
+                if (Input.GetMouseButtonDown(1)) { // Только по первому клику в кадре
+                    Vector3 mouseWorldPos = mainCamera.ScreenToWorldPoint(Input.mousePosition);
+                    mouseWorldPos.z = 0;
+                    Instantiate(plantFoodPrefabToSpawn, mouseWorldPos, Quaternion.identity);
+                    EventLogPanel.Instance?.AddLogMessage("Divine: Plant food spawned.");
+                }
             }
         }
     }

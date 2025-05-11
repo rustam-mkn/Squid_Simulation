@@ -19,7 +19,7 @@ public class GeneticAlgorithmManager : MonoBehaviour
 
     public List<Genome> EvolvePopulation(List<Genome> parentGenomes)
     {
-        if (statsManager != null) statsManager.RecordMaxFitness(parentGenomes); // Записываем лучший фитнес до отбора
+        if (statsManager != null) statsManager.RecordMaxFitness(parentGenomes);
 
         List<Genome> newPopulation = new List<Genome>();
         int populationSize = parentGenomes.Count;
@@ -32,13 +32,11 @@ public class GeneticAlgorithmManager : MonoBehaviour
 
         List<Genome> sortedParents = parentGenomes.OrderByDescending(g => g.fitness).ToList();
 
-        // 1. Элитизм
         for (int i = 0; i < Mathf.Min(elitismCount, sortedParents.Count); i++)
         {
-            newPopulation.Add(new Genome(sortedParents[i])); // Копия лучшего генома
+            newPopulation.Add(new Genome(sortedParents[i]));
         }
 
-        // 2. Заполнение остальной популяции
         while (newPopulation.Count < populationSize)
         {
             Genome parent1 = TournamentSelection(sortedParents);
@@ -57,13 +55,14 @@ public class GeneticAlgorithmManager : MonoBehaviour
     {
         if (population == null || population.Count == 0) {
              Debug.LogError("TournamentSelection called with empty population!");
-             // Возвращаем случайный новый геном, чтобы избежать NullReferenceException, но это плохая ситуация
              SimulationManager sm = FindFirstObjectByType<SimulationManager>();
-             return new Genome(sm.numInputNodes, sm.numHiddenNodes, sm.numOutputNodes);
+             // Возвращаем геном с корректными размерами НС, если sm найден
+             if (sm != null) return new Genome(sm.numInputNodes, sm.numHiddenNodes, sm.numOutputNodes);
+             else return new Genome(1,1,1); // Абсолютный fallback, если все плохо
         }
 
-        Genome bestInTournament = population[Random.Range(0, population.Count)]; // Инициализируем случайным
-        for (int i = 1; i < tournamentSize; i++) // Начинаем с 1, т.к. уже выбрали одного
+        Genome bestInTournament = population[Random.Range(0, population.Count)];
+        for (int i = 1; i < tournamentSize; i++)
         {
             Genome candidate = population[Random.Range(0, population.Count)];
             if (candidate.fitness > bestInTournament.fitness)
@@ -71,18 +70,16 @@ public class GeneticAlgorithmManager : MonoBehaviour
                 bestInTournament = candidate;
             }
         }
-        return new Genome(bestInTournament); // Возвращаем копию
+        return new Genome(bestInTournament);
     }
 
     Genome Crossover(Genome parent1, Genome parent2)
     {
-        // Используем геном родителя1 как основу для потомка
-        Genome offspring = new Genome(parent1); // Копирующий конструктор уже есть
+        Genome offspring = new Genome(parent1);
         
-        // Скрещивание весов НС (одноточечное)
-        if (parent1.nnWeights.Count == parent2.nnWeights.Count) { // Убедимся, что структуры НС одинаковы
+        if (parent1.nnWeights.Count == parent2.nnWeights.Count) {
             int crossoverPointWeights = Random.Range(0, parent1.nnWeights.Count);
-            for (int i = crossoverPointWeights; i < parent1.nnWeights.Count; i++) // Начинаем с точки кроссовера
+            for (int i = crossoverPointWeights; i < parent1.nnWeights.Count; i++)
             {
                 offspring.nnWeights[i] = parent2.nnWeights[i];
             }
@@ -90,21 +87,23 @@ public class GeneticAlgorithmManager : MonoBehaviour
             Debug.LogWarning("NN weights count mismatch during crossover. Offspring inherits parent1's weights fully.");
         }
 
-
-        // Скрещивание физических генов (пример: усреднение или 50/50 шанс)
-        // Для каждого гена решаем, от какого родителя он будет, или смешиваем
         if (Random.value < 0.5f) offspring.mantleLength = parent2.mantleLength;
-        offspring.mantleMaxDiameter = (parent1.mantleMaxDiameter + parent2.mantleMaxDiameter) / 2f; // Усреднение
-        if (Random.value < 0.5f) offspring.mantleColor = parent2.mantleColor; // 50/50 шанс
+        offspring.mantleMaxDiameter = (parent1.mantleMaxDiameter + parent2.mantleMaxDiameter) / 2f;
+        if (Random.value < 0.5f) offspring.mantleColor = parent2.mantleColor;
         
         if (Random.value < 0.5f) offspring.baseSwimTentacleLength = parent2.baseSwimTentacleLength;
         offspring.swimTentacleThickness = (parent1.swimTentacleThickness + parent2.swimTentacleThickness) / 2f;
         
-        offspring.baseGraspTentacleLength = (parent1.baseGraspTentacleLength + parent2.baseGraspTentacleLength) / 2f;
-        if (Random.value < 0.5f) offspring.maxGraspTentacleLengthFactor = parent2.maxGraspTentacleLengthFactor;
-        if (Random.value < 0.5f) offspring.graspTentacleThickness = parent2.graspTentacleThickness;
+        // --- УДАЛЕНЫ СТРОКИ ДЛЯ ХВАТАТЕЛЬНЫХ ЩУПАЛЕЦ ---
+        // offspring.baseGraspTentacleLength = (parent1.baseGraspTentacleLength + parent2.baseGraspTentacleLength) / 2f;
+        // if (Random.value < 0.5f) offspring.maxGraspTentacleLengthFactor = parent2.maxGraspTentacleLengthFactor;
+        // if (Random.value < 0.5f) offspring.graspTentacleThickness = parent2.graspTentacleThickness;
+        // ---------------------------------------------
         
         offspring.eyeSize = (parent1.eyeSize + parent2.eyeSize) / 2f;
+        if (Random.value < 0.5f) offspring.baseTurnTorqueFactor = parent2.baseTurnTorqueFactor; // Добавлено скрещивание для новых генов
+        if (Random.value < 0.5f) offspring.baseMoveForceFactor = parent2.baseMoveForceFactor;   // Добавлено скрещивание для новых генов
+
         if (Random.value < 0.5f) offspring.metabolismRateFactor = parent2.metabolismRateFactor;
         if (Random.value < 0.5f) offspring.maxAge = parent2.maxAge;
         
@@ -116,7 +115,6 @@ public class GeneticAlgorithmManager : MonoBehaviour
 
     public void Mutate(Genome genome)
     {
-        // Мутация весов НС
         for (int i = 0; i < genome.nnWeights.Count; i++)
         {
             if (Random.value < mutationRate)
@@ -126,38 +124,35 @@ public class GeneticAlgorithmManager : MonoBehaviour
             }
         }
 
-        // --- Мутация физических параметров ---
-        if (Random.value < mutationRate)
-            genome.mantleLength += Random.Range(-mutationAmount * 0.2f, mutationAmount * 0.2f);
+        if (Random.value < mutationRate) genome.mantleLength += Random.Range(-mutationAmount * 0.2f, mutationAmount * 0.2f);
         genome.mantleLength = Mathf.Max(0.2f, genome.mantleLength);
 
-        if (Random.value < mutationRate)
-            genome.mantleMaxDiameter += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
+        if (Random.value < mutationRate) genome.mantleMaxDiameter += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
         genome.mantleMaxDiameter = Mathf.Max(0.1f, genome.mantleMaxDiameter);
-
-        if (Random.value < mutationRate)
-            genome.baseSwimTentacleLength += Random.Range(-mutationAmount * 0.15f, mutationAmount * 0.15f);
+        
+        if (Random.value < mutationRate) genome.baseSwimTentacleLength += Random.Range(-mutationAmount * 0.15f, mutationAmount * 0.15f);
         genome.baseSwimTentacleLength = Mathf.Max(0.1f, genome.baseSwimTentacleLength);
 
-        if (Random.value < mutationRate)
-            genome.swimTentacleThickness += Random.Range(-mutationAmount * 0.05f, mutationAmount * 0.05f);
+        if (Random.value < mutationRate) genome.swimTentacleThickness += Random.Range(-mutationAmount * 0.05f, mutationAmount * 0.05f);
         genome.swimTentacleThickness = Mathf.Max(0.01f, genome.swimTentacleThickness);
 
-        if (Random.value < mutationRate)
-            genome.baseGraspTentacleLength += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
-        genome.baseGraspTentacleLength = Mathf.Max(0.1f, genome.baseGraspTentacleLength);
+        // --- УДАЛЕНЫ СТРОКИ ДЛЯ ХВАТАТЕЛЬНЫХ ЩУПАЛЕЦ ---
+        // if (Random.value < mutationRate) genome.baseGraspTentacleLength += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
+        // genome.baseGraspTentacleLength = Mathf.Max(0.1f, genome.baseGraspTentacleLength);
+        // if (Random.value < mutationRate) genome.maxGraspTentacleLengthFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
+        // genome.maxGraspTentacleLengthFactor = Mathf.Clamp(genome.maxGraspTentacleLengthFactor, 1f, 4f);
+        // if (Random.value < mutationRate) genome.graspTentacleThickness += Random.Range(-mutationAmount * 0.02f, mutationAmount * 0.02f);
+        // genome.graspTentacleThickness = Mathf.Max(0.01f, genome.graspTentacleThickness);
+        // ---------------------------------------------
 
-        if (Random.value < mutationRate)
-            genome.maxGraspTentacleLengthFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
-        genome.maxGraspTentacleLengthFactor = Mathf.Clamp(genome.maxGraspTentacleLengthFactor, 1f, 4f);
-
-        if (Random.value < mutationRate)
-            genome.graspTentacleThickness += Random.Range(-mutationAmount * 0.02f, mutationAmount * 0.02f);
-        genome.graspTentacleThickness = Mathf.Max(0.01f, genome.graspTentacleThickness);
-
-        if (Random.value < mutationRate)
-            genome.eyeSize += Random.Range(-mutationAmount * 0.05f, mutationAmount * 0.05f);
+        if (Random.value < mutationRate) genome.eyeSize += Random.Range(-mutationAmount * 0.05f, mutationAmount * 0.05f);
         genome.eyeSize = Mathf.Max(0.05f, genome.eyeSize);
+
+        if (Random.value < mutationRate) genome.baseTurnTorqueFactor += Random.Range(-mutationAmount * 0.2f, mutationAmount * 0.2f); // Добавлена мутация
+        genome.baseTurnTorqueFactor = Mathf.Clamp(genome.baseTurnTorqueFactor, 0.1f, 3f);
+        if (Random.value < mutationRate) genome.baseMoveForceFactor += Random.Range(-mutationAmount * 0.2f, mutationAmount * 0.2f); // Добавлена мутация
+        genome.baseMoveForceFactor = Mathf.Clamp(genome.baseMoveForceFactor, 0.1f, 3f);
+
 
         if (Random.value < mutationRate)
             genome.mantleColor = new Color(
@@ -166,30 +161,22 @@ public class GeneticAlgorithmManager : MonoBehaviour
                 Mathf.Clamp01(genome.mantleColor.b + Random.Range(-mutationAmount * 2f, mutationAmount * 2f))
             );
 
-        // --- Метаболизм и продолжительность жизни ---
-        if (Random.value < mutationRate)
-            genome.metabolismRateFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
+        if (Random.value < mutationRate) genome.metabolismRateFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
         genome.metabolismRateFactor = Mathf.Clamp(genome.metabolismRateFactor, 0.5f, 2f);
 
-        if (Random.value < mutationRate)
-            genome.maxAge += Random.Range(-mutationAmount * 20f, mutationAmount * 20f);
+        if (Random.value < mutationRate) genome.maxAge += Random.Range(-mutationAmount * 20f, mutationAmount * 20f);
         genome.maxAge = Mathf.Max(10f, genome.maxAge);
 
-        if (Random.value < mutationRate)
-            genome.energyToReproduceThresholdFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
+        if (Random.value < mutationRate) genome.energyToReproduceThresholdFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
         genome.energyToReproduceThresholdFactor = Mathf.Clamp01(genome.energyToReproduceThresholdFactor);
 
-        if (Random.value < mutationRate)
-            genome.energyCostOfReproductionFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
+        if (Random.value < mutationRate) genome.energyCostOfReproductionFactor += Random.Range(-mutationAmount * 0.1f, mutationAmount * 0.1f);
         genome.energyCostOfReproductionFactor = Mathf.Clamp01(genome.energyCostOfReproductionFactor);
 
-        // --- Поведенческие параметры ---
-        if (Random.value < mutationRate)
-            genome.aggression += Random.Range(-mutationAmount * 0.2f, mutationAmount * 0.2f);
+        if (Random.value < mutationRate) genome.aggression += Random.Range(-mutationAmount * 0.2f, mutationAmount * 0.2f);
         genome.aggression = Mathf.Clamp01(genome.aggression);
 
-        if (Random.value < mutationRate)
-            genome.foodPreference += Random.Range(-mutationAmount * 0.3f, mutationAmount * 0.3f);
+        if (Random.value < mutationRate) genome.foodPreference += Random.Range(-mutationAmount * 0.3f, mutationAmount * 0.3f);
         genome.foodPreference = Mathf.Clamp01(genome.foodPreference);
     }
 }

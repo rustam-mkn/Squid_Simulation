@@ -1,4 +1,6 @@
+// /Users/user/Dev/Unity/Squid/Assets/Agents/SquidMetabolism.cs
 using UnityEngine;
+using System.Linq; // Для LastOrDefault()
 
 public class SquidMetabolism : MonoBehaviour
 {
@@ -10,99 +12,101 @@ public class SquidMetabolism : MonoBehaviour
     public float Age { get; private set; }
     public float maxEnergyGeno { get; private set; }
 
-    private float baseStartingEnergyFactor = 0.7f;
-    private float baseEnergyPerSecond = 2f; // Было 1.0f — увеличено
-
+    // Базовые значения, которые могут быть модифицированы геномом
+    private float baseStartingEnergyFactor = 0.50f; // Начинаем с 50% от макс. энергии
+    private float baseEnergyPerSecond = 0.8f;       // Базовый расход (можно настроить)
+    
     private GeneticAlgorithmManager gaManager;
-
-    // === Новое: кулдаун на размножение ===
-    private float timeSinceLastReproduction = 0f;
-    public float reproductionCooldown = 20f;
 
     public void Initialize(Genome agentGenome, SimulationManager manager, SquidAgent ownerAgent)
     {
         this.genome = agentGenome;
         this.simManager = manager;
         this.agent = ownerAgent;
-        this.gaManager = manager.gaManager;
+        
+        if (simManager != null) this.gaManager = simManager.gaManager;
 
-        if (genome == null || simManager == null || agent == null || gaManager == null) {
-            Debug.LogError("SquidMetabolism initialized with null dependencies!");
+        if (genome == null || simManager == null || agent == null ) {
+            Debug.LogError($"SquidMetabolism on {ownerAgent?.name} initialized with null dependencies! G:{genome != null} SM:{simManager != null} A:{agent != null}. Disabling.");
             enabled = false; return;
         }
 
-        maxEnergyGeno = 50f + 50f * Mathf.Clamp(genome.mantleLength, 0.5f, 2.0f);
+        // Максимальная энергия зависит от размера (длины мантии)
+        maxEnergyGeno = 40f + 60f * Mathf.Clamp(genome.mantleLength, 0.5f, 2.0f); // Диапазон макс. энергии от 70 до 160
         CurrentEnergy = maxEnergyGeno * baseStartingEnergyFactor;
         Age = 0f;
-        timeSinceLastReproduction = reproductionCooldown; // Можно размножаться сразу, если хватает энергии
     }
 
     public void UpdateMetabolism()
     {
-        if (!enabled) return;
+        if (!enabled || genome == null) return;
 
         Age += Time.deltaTime;
-        timeSinceLastReproduction += Time.deltaTime;
+        // Фитнес: время жизни + бонус за энергию + большой бонус за еду (добавляется в Eat)
+        genome.fitness = Age + (CurrentEnergy / maxEnergyGeno) * 15f; // Бонус за энергию, множитель 15
 
-        // === Фитнес ===
-        genome.fitness = Age;
-
-        // === Расход энергии ===
         float energyDrainThisFrame = baseEnergyPerSecond * genome.metabolismRateFactor;
-
         if (agent.TryGetComponent<Rigidbody2D>(out var rb)) {
-            energyDrainThisFrame += rb.linearVelocity.magnitude * 0.3f; // Усилен расход на движение
+             energyDrainThisFrame += rb.linearVelocity.magnitude * 0.25f; // Увеличен расход на движение
         }
+        // TODO: Добавить расход на активные щупальца, если нужно (например, если currentExtensionRatio > 0.1)
 
         CurrentEnergy -= energyDrainThisFrame * Time.deltaTime;
 
-        // === Смерть ===
         if (CurrentEnergy <= 0 || Age >= genome.maxAge)
         {
             Die();
             return;
         }
 
-        // === Размножение ===
-        float reproductionThreshold = maxEnergyGeno * genome.energyToReproduceThresholdFactor;
-        if (CurrentEnergy >= reproductionThreshold && timeSinceLastReproduction >= reproductionCooldown)
-        {
-            TryReproduce();
-        }
+        TryReproduce();
     }
 
     public void Eat(float energyValue, FoodType foodType)
     {
+        if (!enabled) return;
         CurrentEnergy += energyValue;
         CurrentEnergy = Mathf.Clamp(CurrentEnergy, 0, maxEnergyGeno);
-        genome.fitness += energyValue * 0.2f; // Бонус за еду
+        genome.fitness += energyValue * 0.75f; // <<< ЗНАЧИТЕЛЬНО УВЕЛИЧЕН БОНУС К ФИТНЕСУ ЗА ЕДУ (0.75 от ценности еды)
+        
+        // EventLogPanel.Instance?.AddLogMessage($"{agent.name.Split('_').LastOrDefault()} ate {foodType}. E: {CurrentEnergy:F0}, Fit+={energyValue * 0.75f:F1}");
     }
 
     void TryReproduce()
     {
-        float costOfReproduction = maxEnergyGeno * genome.energyCostOfReproductionFactor;
-        if (CurrentEnergy < costOfReproduction + 10f) return;
+        if (!enabled || genome == null) return;
 
-        CurrentEnergy -= costOfReproduction;
-        genome.fitness += costOfReproduction * 0.3f;
+        float reproductionEnergyActualThreshold = maxEnergyGeno * genome.energyToReproduceThresholdFactor;
+        float costOfReproductionActual = maxEnergyGeno * genome.energyCostOfReproductionFactor;
+
+        if (CurrentEnergy < reproductionEnergyActualThreshold) {
+            return;
+        }
+
+        float energyAfterReproduction = CurrentEnergy - costOfReproductionActual;
+        if (energyAfterReproduction < maxEnergyGeno * 0.25f || energyAfterReproduction < 20f) // Должно остаться хотя бы 25% или 20 единиц
+        {
+            return;
+        }
+        
+        CurrentEnergy -= costOfReproductionActual;
+        genome.fitness += costOfReproductionActual * 0.5f; // Бонус к фитнесу за успешное размножение
 
         Genome offspringGenome = new Genome(genome);
-
-        if (gaManager != null)
-        {
+        
+        if (gaManager != null) {
             gaManager.Mutate(offspringGenome);
+        } else {
+            Debug.LogWarning("GAManager not found for mutation during reproduction on " + agent.name);
         }
-        else
-        {
-            Debug.LogWarning("GAManager not found for mutation during reproduction.");
-        }
-
+        
         agent.ReportReproduction(offspringGenome);
-        timeSinceLastReproduction = 0f; // Сброс кулдауна
     }
 
     void Die()
     {
+        if (!enabled) return; // Предотвращаем многократный вызов, если уже умерли
+        // Финальный фитнес уже должен быть накоплен в genome.fitness
         agent.ReportDeath();
         enabled = false;
     }

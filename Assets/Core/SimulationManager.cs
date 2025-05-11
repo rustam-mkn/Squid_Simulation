@@ -1,6 +1,7 @@
 // /Users/user/Dev/Unity/Squid/Assets/Core/SimulationManager.cs
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
 
 public class SimulationManager : MonoBehaviour
 {
@@ -9,232 +10,235 @@ public class SimulationManager : MonoBehaviour
     public FoodSpawner foodSpawner;
     public StatisticsManager statisticsManager;
     public GeneticAlgorithmManager gaManager;
-    public UIManager uiManager; // Ссылка на UI менеджер
+    public UIManager uiManager;
 
     [Header("Simulation Settings")]
-    public int initialPopulationSize = 20;
-    public float generationTime = 60f; // Секунд
+    public int initialPopulationSize = 15;
+    public float generationTime = 75f;
     private float currentGenerationTimer;
+    
+    // --- ПОЛЯ ДЛЯ НАСТРОЙКИ В ИНСПЕКТОРЕ ---
+    [Tooltip("Global multiplier for base energy drain. Affects new agents. 1.0 = normal, >1 = faster drain, <1 = slower drain.")]
+    [Range(0.1f, 5f)]
+    public float baseEnergyDrainMultiplier = 1.0f;
+
+    [Tooltip("Energy level (as a factor of max energy, e.g., 0.9 = 90%) an agent needs to reach to be able to reproduce. Affects new agents.")]
+    [Range(0.5f, 0.99f)]
+    public float reproductionEnergyThresholdSetting = 0.90f; // <<< ВОТ ЭТО ПОЛЕ БЫЛО ПРОПУЩЕНО РАНЕЕ
+    // ----------------------------------------------------
 
     private List<SquidAgent> agents = new List<SquidAgent>();
-    private List<Genome> genomesForNextGeneration = new List<Genome>(); // Геномы, которые пойдут в ГА
+    private List<Genome> genomesForNextGeneration = new List<Genome>();
 
     [Header("Neural Network Genome Params")]
-    public int numInputNodes = 10;
-    public int numHiddenNodes = 15;
-    public int numOutputNodes = 8;
+    public int numInputNodes = 20;
+    public int numHiddenNodes = 20;
+    public int numOutputNodes = 4;
 
     public bool isRunning { get; private set; } = false;
+    public bool isPaused { get; private set; } = false;
     public int currentGenerationNumber { get; private set; } = 0;
-
+    private float timeScaleBeforePause = 1f;
 
     void Start()
     {
-        // Попытка найти объекты, если они не назначены в инспекторе
-        if (foodSpawner == null) foodSpawner = FindFirstObjectByType<FoodSpawner>();
-        if (statisticsManager == null) statisticsManager = FindFirstObjectByType<StatisticsManager>();
-        if (gaManager == null) gaManager = FindFirstObjectByType<GeneticAlgorithmManager>();
-        if (uiManager == null) uiManager = FindFirstObjectByType<UIManager>();
+        bool referencesOk = true;
+        if (foodSpawner == null) { foodSpawner = FindFirstObjectByType<FoodSpawner>(); if (foodSpawner == null) { Debug.LogError("FoodSpawner not found!"); referencesOk = false; } }
+        if (statisticsManager == null) { statisticsManager = FindFirstObjectByType<StatisticsManager>(); if (statisticsManager == null) { Debug.LogError("StatisticsManager not found!"); referencesOk = false; } }
+        if (gaManager == null) { gaManager = FindFirstObjectByType<GeneticAlgorithmManager>(); if (gaManager == null) { Debug.LogError("GeneticAlgorithmManager not found!"); referencesOk = false; } }
+        if (uiManager == null) { uiManager = FindFirstObjectByType<UIManager>(); if (uiManager == null) { Debug.LogError("UIManager not found!"); referencesOk = false; } }
+        if (squidAgentPrefab == null) { Debug.LogError("SquidAgentPrefab not assigned!"); referencesOk = false; }
 
-        if (foodSpawner == null || statisticsManager == null || gaManager == null || uiManager == null || squidAgentPrefab == null)
+        if (!referencesOk)
         {
-            Debug.LogError("SimulationManager is missing critical references! Please assign them in the Inspector.");
-            enabled = false; // Отключаем компонент, если что-то важное не настроено
+            Debug.LogError("SimulationManager is missing critical references! Please assign them in the Inspector. Disabling SimulationManager.");
+            enabled = false;
             return;
         }
-        // Начальное состояние - симуляция не запущена. Запуск через UI.
-        Time.timeScale = 1f; // Убедимся, что время идет
+        
+        Time.timeScale = 1f;
+        isPaused = false;
+        isRunning = false;
+        // UIManager.InitializeUIValues теперь не принимает baseEnergyDrainMultiplier, так как он не управляет им
+        if (uiManager) uiManager.InitializeUIValues(Time.timeScale, currentGenerationNumber);
     }
 
     public void RequestStartSimulation()
     {
-        if (isRunning)
-        {
-            Debug.LogWarning("Simulation is already running.");
-            return;
+        if (isRunning && !isPaused) {
+            Debug.LogWarning("Simulation is already running. Restarting...");
+            ClearPopulation();
+        } else if (isRunning && isPaused) {
+             Debug.LogWarning("Simulation was paused. Starting fresh (like a restart).");
+             isPaused = false;
+             ClearPopulation();
         }
-        Debug.Log("Simulation Starting...");
+        
+        Debug.Log($"Simulation Starting/Restarting. EnergyDrainMultiplier: {baseEnergyDrainMultiplier}, ReproThreshold: {reproductionEnergyThresholdSetting:P0}");
         isRunning = true;
-        Time.timeScale = 1f;
+        isPaused = false;
+        
+        float requestedTimeScale = (uiManager != null ? uiManager.GetCurrentTimeScaleRequest() : 1f);
+        timeScaleBeforePause = Mathf.Max(0.01f, requestedTimeScale);
+        Time.timeScale = timeScaleBeforePause;
+
         currentGenerationNumber = 1;
         InitializeFirstGeneration();
         currentGenerationTimer = generationTime;
+        
         if (statisticsManager) statisticsManager.ResetStatistics();
-        if (foodSpawner) foodSpawner.SpawnInitialFood(); // Спавним еду при старте
-        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, Time.timeScale, currentGenerationNumber);
+        if (foodSpawner) foodSpawner.SpawnInitialFood();
+        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, isPaused, Time.timeScale, currentGenerationNumber);
     }
 
-    public void RequestPauseSimulation()
-    {
-        if (!isRunning) return;
-        isRunning = false; // Логическая пауза
-        Time.timeScale = 0f; // Физическая остановка времени
+    public void RequestPauseSimulation() {
+        if (!isRunning || isPaused) return; isPaused = true;
+        timeScaleBeforePause = Time.timeScale; Time.timeScale = 0f;
         Debug.Log("Simulation Paused.");
-        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, Time.timeScale, currentGenerationNumber);
+        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, isPaused, Time.timeScale, currentGenerationNumber);
     }
 
-    public void RequestResumeSimulation()
-    {
-        if (isRunning && Time.timeScale == 0f) // Если была на паузе
-        {
-            Time.timeScale = uiManager != null ? uiManager.GetCurrentTimeScaleRequest() : 1f; // Восстанавливаем запрошенную скорость
-            isRunning = true; // Логическое возобновление
-            Debug.Log("Simulation Resumed.");
-        } else if (!isRunning && Time.timeScale > 0f) { // Если была остановлена, но время шло (редко)
-             isRunning = true;
-             Debug.Log("Simulation Resumed (logical).");
-        }
-        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, Time.timeScale, currentGenerationNumber);
+    public void RequestResumeSimulation() {
+        if (!isRunning || !isPaused) return; isPaused = false;
+        Time.timeScale = timeScaleBeforePause; if (Time.timeScale < 0.01f) Time.timeScale = 1f;
+        Debug.Log($"Simulation Resumed. TimeScale: {Time.timeScale}");
+        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, isPaused, Time.timeScale, currentGenerationNumber);
     }
     
-    public void RequestAdjustTimeScale(float scale)
-    {
-        if (isRunning) // Меняем скорость только если симуляция активна
-        {
-            Time.timeScale = Mathf.Max(0.1f, scale);
-            Debug.Log($"Time scale set to: {Time.timeScale}");
-        }
-        if (uiManager) uiManager.UpdateTimeScaleSliderValue(Time.timeScale); // Обновляем UI даже если не запущено, чтобы запомнить значение
-        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, Time.timeScale, currentGenerationNumber);
+    public void RequestAdjustTimeScale(float requestedScale) {
+        float newScale = Mathf.Max(0.01f, requestedScale); timeScaleBeforePause = newScale;
+        if (!isPaused) { Time.timeScale = newScale; }
+        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, isPaused, Time.timeScale, currentGenerationNumber);
     }
 
-    void Update()
-    {
-        if (!isRunning || Time.timeScale == 0f) return; // Если на физической паузе или не запущена
-
-        currentGenerationTimer -= Time.deltaTime;
-        if (currentGenerationTimer <= 0 || (agents.Count == 0 && genomesForNextGeneration.Count > 0))
-        {
+    void Update() {
+        if (!isRunning || isPaused) return; currentGenerationTimer -= Time.deltaTime;
+        bool allAgentsDead = agents.Count == 0;
+        bool canPotentiallyEvolve = genomesForNextGeneration.Count > 0 || agents.Count > 0;
+        if (currentGenerationTimer <= 0 || (allAgentsDead && canPotentiallyEvolve && currentGenerationNumber > 0) ) {
             PrepareAndStartNewGeneration();
-        }
-
-        if (statisticsManager)
-        {
-            // Статистика будет собираться в своем Update
         }
     }
 
     void InitializeFirstGeneration()
     {
         ClearPopulation();
-        genomesForNextGeneration.Clear();
-        for (int i = 0; i < initialPopulationSize; i++)
-        {
-            Genome newGenome = new Genome(numInputNodes, numHiddenNodes, numOutputNodes);
-            newGenome.InitializeRandomPhysicalGenes(); // Важно инициализировать физ. гены
-            // genomesForNextGeneration.Add(newGenome); // Не добавляем сразу, они спавнятся
-            SpawnAgent(newGenome);
+        if (initialPopulationSize > 0) {
+            for (int i = 0; i < initialPopulationSize; i++)
+            {
+                Genome newGenome = new Genome(numInputNodes, numHiddenNodes, numOutputNodes);
+                newGenome.InitializeRandomPhysicalGenes();
+                
+                // Применяем глобальные настройки из SimulationManager к геному новых агентов
+                newGenome.metabolismRateFactor = newGenome.metabolismRateFactor * this.baseEnergyDrainMultiplier;
+                newGenome.metabolismRateFactor = Mathf.Clamp(newGenome.metabolismRateFactor, 0.1f, 10f);
+                
+                newGenome.energyToReproduceThresholdFactor = this.reproductionEnergyThresholdSetting;
+                // energyCostOfReproductionFactor остается случайным из генома, но можно тоже сделать настраиваемым
+                
+                SpawnAgent(newGenome);
+            }
         }
-        Debug.Log($"Initialized first generation with {agents.Count} agents.");
+        Debug.Log($"Initialized first generation ({currentGenerationNumber}) with {agents.Count} agents. EnergyDrainMultiplier: {baseEnergyDrainMultiplier:F2}, ReproThreshold: {reproductionEnergyThresholdSetting:P0}");
     }
 
     void PrepareAndStartNewGeneration()
     {
-        Debug.Log("Preparing new generation...");
-        currentGenerationNumber++;
-        
-        // Сбор геномов для эволюции. Фитнес должен быть присвоен геному ДО этого момента.
-        // SquidMetabolism должен обновлять genome.fitness по мере жизни или при смерти.
-        List<Genome> evaluatedGenomes = new List<Genome>(genomesForNextGeneration); // Берем собранные геномы (умерших и выживших в конце)
-        genomesForNextGeneration.Clear(); // Очищаем для следующего сбора
+        if (!isRunning) return;
 
-        // Если все агенты умерли до окончания таймера поколения,
-        // evaluatedGenomes уже должен быть заполнен их геномами с фитнесом.
-        // Если таймер сработал, а агенты еще живы, их геномы тоже нужно добавить.
+        currentGenerationNumber++;
+        Debug.Log($"Preparing new generation #{currentGenerationNumber}...");
+        
+        List<Genome> genomesToEvolve = new List<Genome>();
+        genomesToEvolve.AddRange(genomesForNextGeneration);
+        genomesForNextGeneration.Clear();
+
         foreach (var agent in agents) {
-            if (agent != null && agent.genome != null) {
-                 // Убеждаемся, что фитнес актуален (например, время жизни)
-                 if(agent.TryGetComponent<SquidMetabolism>(out var meta)) agent.genome.fitness = meta.Age;
-                 // Добавляем только если такого генома еще нет (избегаем дубликатов, если агент умер и его геном уже в genomesForNextGeneration)
-                 if (!evaluatedGenomes.Exists(g => g == agent.genome)) // Сравнение по ссылке, если геном один и тот же объект
-                 {
-                    evaluatedGenomes.Add(new Genome(agent.genome)); // Добавляем КОПИЮ генома выжившего
+            if (agent != null && agent.isInitialized && agent.genome != null) {
+                 if(agent.TryGetComponent<SquidMetabolism>(out var meta)) {
+                     agent.genome.fitness = meta.Age + (meta.CurrentEnergy / meta.maxEnergyGeno) * 25f;
                  }
+                 genomesToEvolve.Add(new Genome(agent.genome));
             }
         }
 
-        ClearAgentsVisuals(); // Уничтожаем GameObjects старых агентов
+        ClearAgentsVisuals();
 
-        if (evaluatedGenomes.Count == 0) {
-            Debug.LogWarning("No genomes to evolve from. Re-initializing first generation.");
-            InitializeFirstGeneration(); // Начать заново, если совсем нет генов
+        if (genomesToEvolve.Count == 0) {
+            Debug.LogWarning("No genomes to evolve from for new generation.");
+            if (initialPopulationSize > 0) {
+                Debug.LogWarning("Re-initializing population as first generation.");
+                currentGenerationNumber = 1;
+                InitializeFirstGeneration();
+            } else {
+                Debug.LogError("No genomes to evolve AND initialPopulationSize is 0. Simulation will stop progressing.");
+                isRunning = false;
+            }
             currentGenerationTimer = generationTime;
-            if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, Time.timeScale, currentGenerationNumber);
+            if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, isPaused, Time.timeScale, currentGenerationNumber);
             return;
         }
 
-        List<Genome> newGenerationGenomes = gaManager.EvolvePopulation(evaluatedGenomes);
+        List<Genome> newGenerationGenomes = gaManager.EvolvePopulation(genomesToEvolve);
 
-        foreach (Genome genome in newGenerationGenomes)
-        {
-            genome.fitness = 0; // Сброс фитнеса для нового поколения
-            SpawnAgent(genome);
+        if (newGenerationGenomes.Count == 0 && initialPopulationSize > 0) {
+             Debug.LogWarning("GA returned 0 genomes, but initialPopulationSize > 0. Re-initializing to avoid empty state.");
+             InitializeFirstGeneration();
+        } else if (newGenerationGenomes.Count > 0) {
+            foreach (Genome genome in newGenerationGenomes)
+            {
+                genome.fitness = 0;
+                // Применяем глобальные настройки из SimulationManager к геному потомков
+                genome.metabolismRateFactor = genome.metabolismRateFactor * this.baseEnergyDrainMultiplier;
+                genome.metabolismRateFactor = Mathf.Clamp(genome.metabolismRateFactor, 0.1f, 10f);
+                
+                genome.energyToReproduceThresholdFactor = this.reproductionEnergyThresholdSetting;
+
+                SpawnAgent(genome);
+            }
+        } else {
+             Debug.LogError("GA returned 0 genomes and initialPopulationSize is 0. Simulation cannot continue.");
+             isRunning = false;
         }
+
         currentGenerationTimer = generationTime;
-        Debug.Log($"Spawned new generation #{currentGenerationNumber} with {agents.Count} agents.");
-        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, Time.timeScale, currentGenerationNumber);
+        Debug.Log($"Spawned generation #{currentGenerationNumber} with {agents.Count} agents.");
+        if (uiManager) uiManager.UpdateSimulationStateUI(isRunning, isPaused, Time.timeScale, currentGenerationNumber);
     }
 
-    void SpawnAgent(Genome genome, Vector3? position = null)
-    {
-        if (squidAgentPrefab == null) {
-            Debug.LogError("SquidAgent Prefab is not set in SimulationManager!");
-            return;
-        }
+    void SpawnAgent(Genome genome, Vector3? position = null) {
+        if (squidAgentPrefab == null) { Debug.LogError("SquidAgent Prefab is not set!"); return; }
         Vector3 spawnPos = position ?? GetRandomSpawnPosition();
         GameObject agentGO = Instantiate(squidAgentPrefab, spawnPos, Quaternion.identity);
         SquidAgent squidAgent = agentGO.GetComponent<SquidAgent>();
-        if (squidAgent != null)
-        {
-            squidAgent.Initialize(genome, this);
-            agents.Add(squidAgent);
-        } else {
-            Debug.LogError($"Failed to get SquidAgent component from prefab instance: {agentGO.name}");
-            Destroy(agentGO); // Уничтожаем, если не удалось инициализировать
-        }
+        if (squidAgent != null) { squidAgent.Initialize(genome, this); agents.Add(squidAgent); }
+        else { Debug.LogError($"Failed to get SquidAgent component from {agentGO.name}. Destroying."); Destroy(agentGO); }
     }
 
-    Vector3 GetRandomSpawnPosition()
-    {
-        float spawnRadius = (foodSpawner != null) ? foodSpawner.spawnRadius : 20f;
-        // Убедимся, что спавн в пределах WorldBounds, если они есть
+    Vector3 GetRandomSpawnPosition() {
         WorldBounds wb = FindFirstObjectByType<WorldBounds>();
-        if (wb != null) {
-            return new Vector3(Random.Range(wb.xMin + 1, wb.xMax - 1), Random.Range(wb.yMin + 1, wb.yMax - 1), 0);
-        }
+        if (wb != null) { return new Vector3(Random.Range(wb.xMin + 1f, wb.xMax - 1f), Random.Range(wb.yMin + 1f, wb.yMax - 1f), 0); }
+        float spawnRadius = (foodSpawner != null) ? foodSpawner.spawnRadius : 20f;
         return new Vector3(Random.Range(-spawnRadius, spawnRadius), Random.Range(-spawnRadius, spawnRadius), 0);
     }
 
-    public void ReportAgentDeath(SquidAgent agent, Genome finalGenome)
-    {
-        if (agents.Remove(agent))
-        {
-            genomesForNextGeneration.Add(finalGenome); // Добавляем геном с финальным фитнесом
+    public void ReportAgentDeath(SquidAgent agent, Genome finalGenome) {
+        if (agents.Contains(agent)) {
+            agents.Remove(agent); genomesForNextGeneration.Add(finalGenome);
             if (foodSpawner) foodSpawner.SpawnFoodAt(foodSpawner.meatFoodPrefab, agent.transform.position);
-            Debug.Log($"Agent {agent.gameObject.name} died. Fitness: {finalGenome.fitness:F2}. Remaining: {agents.Count}");
+            EventLogPanel.Instance?.AddLogMessage($"Squid {agent.gameObject.name.Split('_').LastOrDefault()} died. Fit: {finalGenome.fitness:F1}");
         }
     }
     
-    public void ReportAgentReproduction(SquidAgent parent, Genome offspringGenome)
-    {
-        // offspringGenome уже должен быть мутирован и готов к спавну
-        // (мутация и скрещивание - ответственность GA Manager, вызываемого из SquidMetabolism -> Reproduce)
-        SpawnAgent(offspringGenome, parent.transform.position + (Vector3)Random.insideUnitCircle * 2f);
-        Debug.Log($"Agent {parent.gameObject.name} reproduced.");
+    public void ReportAgentReproduction(SquidAgent parent, Genome offspringGenome) {
+        if (agents.Count < 150) { SpawnAgent(offspringGenome, parent.transform.position + (Vector3)Random.insideUnitCircle * 1.5f); }
     }
 
-    void ClearPopulation() // Полная очистка, включая геномы
-    {
-        ClearAgentsVisuals();
-        genomesForNextGeneration.Clear();
-    }
+    void ClearPopulation() { ClearAgentsVisuals(); genomesForNextGeneration.Clear(); }
     
-    void ClearAgentsVisuals() // Только GameObjects
-    {
-        foreach (var agent in agents)
-        {
-            if (agent != null) Destroy(agent.gameObject);
-        }
+    void ClearAgentsVisuals() {
+        List<SquidAgent> agentsToDestroy = new List<SquidAgent>(agents);
+        foreach (var agent in agentsToDestroy) { if (agent != null) Destroy(agent.gameObject); }
         agents.Clear();
     }
 }
